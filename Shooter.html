@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<title>Laser Killer AR</title>
+<style>
+  /* =========================================================
+     GLOBAL RESET & BASE
+     ========================================================= */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    background: #000;
+    color: #e6f7ff;
+    font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-user-select: none; user-select: none;
+    touch-action: none;
+  }
+
+  /* =========================================================
+     CAMERA FEED (BACKGROUND)
+     ========================================================= */
+  #cameraVideo {
+    position: fixed; inset: 0;
+    width: 100%; height: 100%;
+    object-fit: cover;
+    background: radial-gradient(circle at 50% 40%, #0a1a2a 0%, #000 70%);
+    z-index: 0;
+  }
+  #gameCanvas {
+    position: fixed; inset: 0;
+    width: 100%; height: 100%;
+    z-index: 2;
+    pointer-events: none;
+  }
+
+  /* =========================================================
+     FLASH / SHAKE OVERLAYS
+     ========================================================= */
+  #flashOverlay {
+    position: fixed; inset: 0;
+    background: #fff; opacity: 0;
+    pointer-events: none;
+    z-index: 3;
+    mix-blend-mode: screen;
+  }
+  #damageOverlay {
+    position: fixed; inset: 0;
+    background: radial-gradient(circle, transparent 40%, rgba(255,0,60,0.6) 100%);
+    opacity: 0;
+    pointer-events: none;
+    z-index: 3;
+  }
+  .shake { animation: shake 0.25s linear; }
+  @keyframes shake {
+    0%, 100% { transform: translate(0,0); }
+    20% { transform: translate(-6px, 4px); }
+    40% { transform: translate(5px, -5px); }
+    60% { transform: translate(-4px, -3px); }
+    80% { transform: translate(4px, 3px); }
+  }
+
+  /* =========================================================
+     HUD (NEON)
+     ========================================================= */
+  #hud {
+    position: fixed; inset: 0;
+    pointer-events: none;
+    z-index: 4;
+    padding: env(safe-area-inset-top, 10px) env(safe-area-inset-right, 10px) env(safe-area-inset-bottom, 10px) env(safe-area-inset-left, 10px);
+  }
+  .hud-panel {
+    pointer-events: auto;
+    background: rgba(5, 10, 25, 0.55);
+    border: 1px solid rgba(0, 220, 255, 0.6);
+    box-shadow: 0 0 12px rgba(0, 220, 255, 0.35), inset 0 0 10px rgba(0, 220, 255, 0.15);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    color: #baf5ff;
+    font-family: 'Consolas', 'Courier New', monospace;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    font-size: 12px;
+  }
+
+  /* Top bar */
+  #topBar {
+    position: absolute; top: 10px; left: 10px; right: 10px;
+    display: flex; justify-content: space-between; align-items: flex-start;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .stat-group { display: flex; gap: 6px; flex-wrap: wrap; }
+  .stat {
+    padding: 8px 12px;
+    min-width: 78px;
+    text-align: center;
+    border-radius: 4px;
+    position: relative;
+  }
+  .stat .label {
+    font-size: 9px;
+    color: #5ad7ff;
+    opacity: 0.8;
+    display: block;
+    margin-bottom: 2px;
+  }
+  .stat .value {
+    font-size: 16px;
+    font-weight: bold;
+    color: #e6f7ff;
+    text-shadow: 0 0 6px #00e0ff, 0 0 12px #00e0ff;
+  }
+  .stat.health .value { color: #ff4d6d; text-shadow: 0 0 6px #ff4d6d, 0 0 12px #ff4d6d; }
+  .stat.score .value { color: #ffe94d; text-shadow: 0 0 6px #ffe94d, 0 0 12px #ffe94d; }
+  .stat.level .value { color: #c77dff; text-shadow: 0 0 6px #c77dff, 0 0 12px #c77dff; }
+  .stat.timer .value { color: #00ffae; text-shadow: 0 0 6px #00ffae, 0 0 12px #00ffae; }
+
+  /* Health bar */
+  .health-bar {
+    margin-top: 4px;
+    width: 100%; height: 4px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .health-bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #ff4d6d, #ff8fa3);
+    box-shadow: 0 0 8px #ff4d6d;
+    width: 100%;
+    transition: width 0.2s ease;
+  }
+
+  /* Control buttons */
+  #controlBar {
+    position: absolute; top: 10px; right: 10px;
+    display: flex; gap: 6px;
+  }
+  .ctrl-btn {
+    width: 42px; height: 42px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    font-size: 18px;
+    transition: transform 0.1s, box-shadow 0.2s;
+    color: #e6f7ff;
+  }
+  .ctrl-btn:active { transform: scale(0.9); box-shadow: 0 0 18px rgba(0, 220, 255, 0.9); }
+
+  /* Bottom info */
+  #bottomInfo {
+    position: absolute; bottom: 10px; left: 10px; right: 10px;
+    display: flex; justify-content: space-between; align-items: flex-end;
+    pointer-events: none;
+    font-family: 'Consolas', monospace;
+    font-size: 10px;
+    color: #5ad7ff;
+    text-shadow: 0 0 4px #00e0ff;
+    opacity: 0.8;
+  }
+  #bottomInfo .fps { color: #00ffae; }
+
+  /* Crosshair (rendered on canvas, but fallback CSS if needed) */
+
+  /* =========================================================
+     START SCREEN
+     ========================================================= */
+  #startScreen {
+    position: fixed; inset: 0;
+    z-index: 10;
+    background: radial-gradient(ellipse at center, #0a1a3a 0%, #000 80%);
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    padding: 20px;
+    text-align: center;
+  }
+  #startScreen h1 {
+    font-family: 'Consolas', monospace;
+    font-size: clamp(32px, 8vw, 64px);
+    letter-spacing: 4px;
+    color: #e6f7ff;
+    text-shadow:
+      0 0 10px #00e0ff,
+      0 0 20px #00e0ff,
+      0 0 40px #c77dff,
+      0 0 60px #c77dff;
+    margin-bottom: 8px;
+    animation: titlePulse 2.5s ease-in-out infinite;
+  }
+  @keyframes titlePulse {
+    0%, 100% { text-shadow: 0 0 10px #00e0ff, 0 0 20px #00e0ff, 0 0 40px #c77dff; }
+    50% { text-shadow: 0 0 14px #00e0ff, 0 0 30px #00e0ff, 0 0 60px #c77dff, 0 0 80px #c77dff; }
+  }
+  #startScreen .subtitle {
+    font-family: 'Consolas', monospace;
+    font-size: clamp(10px, 2.5vw, 14px);
+    color: #5ad7ff;
+    letter-spacing: 3px;
+    margin-bottom: 40px;
+    text-transform: uppercase;
+  }
+  #startBtn {
+    padding: 16px 48px;
+    font-family: 'Consolas', monospace;
+    font-size: 18px;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    color: #e6f7ff;
+    background: transparent;
+    border: 2px solid #00e0ff;
+    border-radius: 4px;
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+    transition: all 0.3s;
+    box-shadow: 0 0 20px rgba(0, 220, 255, 0.5), inset 0 0 20px rgba(0, 220, 255, 0.2);
+  }
+  #startBtn:hover, #startBtn:active {
+    background: rgba(0, 220, 255, 0.15);
+    box-shadow: 0 0 30px rgba(0, 220, 255, 0.9), inset 0 0 25px rgba(0, 220, 255, 0.3);
+    transform: scale(1.05);
+  }
+  #startBtn::before {
+    content: '';
+    position: absolute; top: 0; left: -100%;
+    width: 100%; height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(0, 220, 255, 0.4), transparent);
+    animation: scanline 2s linear infinite;
+  }
+  @keyframes scanline {
+    0% { left: -100%; }
+    100% { left: 100%; }
+  }
+  .instructions {
+    margin-top: 40px;
+    max-width: 480px;
+    font-size: 12px;
+    line-height: 1.8;
+    color: #8fc7d9;
+    letter-spacing: 1px;
+  }
+  .instructions b { color: #ffe94d; }
+
+  /* =========================================================
+     MODAL (Error / Pause / Game Over)
+     ========================================================= */
+  .modal {
+    position: fixed; inset: 0;
+    z-index: 20;
+    background: rgba(0, 0, 0, 0.85);
+    display: none;
+    align-items: center; justify-content: center;
+    padding: 20px;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+  }
+  .modal.active { display: flex; }
+  .modal-box {
+    background: rgba(10, 20, 40, 0.9);
+    border: 1px solid #00e0ff;
+    box-shadow: 0 0 30px rgba(0, 220, 255, 0.5);
+    padding: 30px 40px;
+    border-radius: 6px;
+    text-align: center;
+    max-width: 420px;
+    width: 100%;
+  }
+  .modal-box h2 {
+    font-family: 'Consolas', monospace;
+    font-size: 24px;
+    color: #e6f7ff;
+    text-shadow: 0 0 10px #00e0ff;
+    margin-bottom: 16px;
+    letter-spacing: 3px;
+  }
+  .modal-box p {
+    color: #baf5ff;
+    font-size: 14px;
+    line-height: 1.6;
+    margin-bottom: 20px;
+  }
+  .modal-btn {
+    padding: 12px 28px;
+    margin: 6px;
+    font-family: 'Consolas', monospace;
+    font-size: 14px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: #e6f7ff;
+    background: transparent;
+    border: 1px solid #00e0ff;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .modal-btn:hover, .modal-btn:active {
+    background: rgba(0, 220, 255, 0.2);
+    box-shadow: 0 0 15px rgba(0, 220, 255, 0.7);
+  }
+  .modal-btn.danger { border-color: #ff4d6d; color: #ffb3c1; }
+  .modal-btn.danger:hover { background: rgba(255, 77, 109, 0.2); box-shadow: 0 0 15px rgba(255, 77, 109, 0.7); }
+
+  /* =========================================================
+     LOADING INDICATOR
+     ========================================================= */
+  #loadingOverlay {
+    position: fixed; inset: 0;
+    z-index: 15;
+    background: rgba(0, 0, 0, 0.9);
+    display: none;
+    align-items: center; justify-content: center;
+    flex-direction: column;
+  }
+  #loadingOverlay.active { display: flex; }
+  .spinner {
+    width: 60px; height: 60px;
+    border: 3px solid rgba(0, 220, 255, 0.2);
+    border-top-color: #00e0ff;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    box-shadow: 0 0 20px rgba(0, 220, 255, 0.5);
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #loadingOverlay p {
+    margin-top: 20px;
+    font-family: 'Consolas', monospace;
+    color: #5ad7ff;
+    letter-spacing: 2px;
+    font-size: 12px;
+  }
+
+  /* =========================================================
+     RESPONSIVE
+     ========================================================= */
+  @media (max-width: 480px) {
+    .stat { padding: 6px 8px; min-width: 62px; }
+    .stat .value { font-size: 13px; }
+    .stat .label { font-size: 8px; }
+    .ctrl-btn { width: 36px; height: 36px; font-size: 15px; }
+  }
+  @media (min-width: 1024px) {
+    .stat { padding: 10px 16px; min-width: 96px; }
+    .stat .value { font-size: 20px; }
+  }
+</style>
+</head>
+<body>
+
+  <!-- =========================================================
+       CAMERA FEED (BACKGROUND)
+       ========================================================= -->
+  <video id="cameraVideo" autoplay playsinline muted></video>
+
+  <!-- =========================================================
+       GAME CANVAS (lasers, enemies, particles, bullets)
+       ========================================================= -->
+  <canvas id="gameCanvas"></canvas>
+
+  <!-- =========================================================
+       OVERLAYS
+       ========================================================= -->
+  <div id="flashOverlay"></div>
+  <div id="damageOverlay"></div>
+
+  <!-- =========================================================
+       HUD
+       ========================================================= -->
+  <div id="hud">
+    <div id="topBar">
+      <div class="stat-group">
+        <div class="stat health hud-panel">
+          <span class="label">Health</span>
+          <span class="value" id="healthValue">100</span>
+          <div class="health-bar"><div class="health-bar-fill" id="healthBar"></div></div>
+        </div>
+        <div class="stat score hud-panel">
+          <span class="label">Score</span>
+          <span class="value" id="scoreValue">0</span>
+        </div>
+        <div class="stat level hud-panel">
+          <span class="label">Level</span>
+          <span class="value" id="levelValue">1</span>
+        </div>
+        <div class="stat timer hud-panel">
+          <span class="label">Timer</span>
+          <span class="value" id="timerValue">00:00</span>
+        </div>
+      </div>
+      <div id="controlBar">
+        <div class="ctrl-btn hud-panel" id="pauseBtn" title="Pause">⏸</div>
+        <div class="ctrl-btn hud-panel" id="restartBtn" title="Restart">↻</div>
+        <div class="ctrl-btn hud-panel" id="fullscreenBtn" title="Fullscreen">⛶</div>
+      </div>
+    </div>
+    <div id="bottomInfo">
+      <div>LASER KILLER AR v1.0</div>
+      <div class="fps" id="fpsDisplay">60 FPS</div>
+    </div>
+  </div>
+
+  <!-- =========================================================
+       START SCREEN
+       ========================================================= -->
+  <div id="startScreen">
+    <h1>LASER KILLER</h1>
+    <div class="subtitle">▸ AUGMENTED REALITY COMBAT ◂</div>
+    <button id="startBtn">START GAME</button>
+    <div class="instructions">
+      <p><b>TAP</b> anywhere to shoot enemy drones.</p>
+      <p>Avoid <b>laser beams</b> — they drain your health.</p>
+      <p>Survive waves, level up, dominate the arena.</p>
+    </div>
+  </div>
+
+  <!-- =========================================================
+       LOADING OVERLAY
+       ========================================================= -->
+  <div id="loadingOverlay">
+    <div class="spinner"></div>
+    <p>INITIALIZING SYSTEMS...</p>
+  </div>
+
+  <!-- =========================================================
+       GENERIC MODAL (error / pause / game over)
+       ========================================================= -->
+  <div class="modal" id="modal">
+    <div class="modal-box">
+      <h2 id="modalTitle">TITLE</h2>
+      <p id="modalMessage">Message</p>
+      <div id="modalButtons"></div>
+    </div>
+  </div>
+
+<script>
+/* ================================================================
+   LASER KILLER AR — Single-file Futuristic AR Shooter
+   Architecture: modular classes, designed for future expansion
+   (multiplayer, AI enemies, cloud save, voice commands, etc.)
+   ================================================================ */
+
+/* ----------------------------------------------------------------
+   1. AUDIO MANAGER — Web Audio API (no external files)
+   ---------------------------------------------------------------- */
+class AudioManager {
+  constructor() {
+    this.ctx = null;
+    this.enabled = true;
+    this.masterGain = null;
+  }
+  /** Initialize AudioContext on first user gesture */
+  init() {
+    if (this.ctx) return;
+    try {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      this.ctx = new AC();
+      this.masterGain = this.ctx.createGain();
+      this.masterGain.gain.value = 0.35;
+      this.masterGain.connect(this.ctx.destination);
+    } catch (e) {
+      console.warn('AudioManager init failed:', e);
+      this.enabled = false;
+    }
+  }
+  resume() {
+    if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
+  }
+  /** Gunshot — short noise burst + pitch sweep */
+  playShoot() {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+    // Noise burst
+    const bufferSize = this.ctx.sampleRate * 0.08;
+    const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufferSize, 2);
+    }
+    const noise = this.ctx.createBufferSource();
+    noise.buffer = buffer;
+    const noiseGain = this.ctx.createGain();
+    noiseGain.gain.setValueAtTime(0.6, t);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = 1800;
+    filter.Q.value = 1.2;
+    noise.connect(filter).connect(noiseGain).connect(this.masterGain);
+    noise.start(t); noise.stop(t + 0.1);
+    // Pitch sweep
+    const osc = this.ctx.createOscillator();
+    const oscGain = this.ctx.createGain();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(900, t);
+    osc.frequency.exponentialRampToValueAtTime(120, t + 0.12);
+    oscGain.gain.setValueAtTime(0.25, t);
+    oscGain.gain.exponentialRampToValueAtTime(0.001, t + 0.12);
+    osc.connect(oscGain).connect(this.masterGain);
+    osc.start(t); osc.stop(t + 0.15);
+  }
+  /** Hit — short metallic thud */
+  playHit() {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(400, t);
+    osc.frequency.exponentialRampToValueAtTime(80, t + 0.15);
+    gain.gain.setValueAtTime(0.4, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+    osc.connect(gain).connect(this.masterGain);
+    osc.start(t); osc.stop(t + 0.22);
+  }
+  /** Explosion — layered noise + low rumble */
+  playExplosion() {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+    // Noise
+    const bufferSize = this.ctx.sampleRate * 0.6;
+    const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufferSize, 1.5);
+    }
+    const noise = this.ctx.createBufferSource();
+    noise.buffer = buffer;
+    const noiseGain = this.ctx.createGain();
+    noiseGain.gain.setValueAtTime(0.8, t);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+    const lp = this.ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(1200, t);
+    lp.frequency.exponentialRampToValueAtTime(120, t + 0.5);
+    noise.connect(lp).connect(noiseGain).connect(this.masterGain);
+    noise.start(t); noise.stop(t + 0.65);
+    // Low rumble
+    const osc = this.ctx.createOscillator();
+    const oscGain = this.ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(80, t);
+    osc.frequency.exponentialRampToValueAtTime(30, t + 0.5);
+    oscGain.gain.setValueAtTime(0.5, t);
+    oscGain.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
+    osc.connect(oscGain).connect(this.masterGain);
+    osc.start(t); osc.stop(t + 0.55);
+  }
+  /** Laser warning — rising tone */
+  playLaserWarn() {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(220, t);
+    osc.frequency.exponentialRampToValueAtTime(880, t + 0.2);
+    gain.gain.setValueAtTime(0.15, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+    osc.connect(gain).connect(this.masterGain);
+    osc.start(t); osc.stop(t + 0.28);
+  }
+  /** Level up — ascending arpeggio */
+  playLevelUp() {
+    if (!this.enabled || !this.ctx) return;
+    const notes = [523, 659, 784, 1047]; // C5 E5 G5 C6
+    notes.forEach((freq, i) => {
+      const t = this.ctx.currentTime + i * 0.1;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.3, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+      osc.connect(gain).connect(this.masterGain);
+      osc.start(t); osc.stop(t + 0.22);
+    });
+  }
+  /** Damage taken */
+  playDamage() {
+    if (!this.enabled || !this.ctx) return;
+    const t = this.ctx.currentTime;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = 'sawtooth';
+    osc.frequency.setValueAtTime(180, t);
+    osc.frequency.exponentialRampToValueAtTime(60, t + 0.3);
+    gain.gain.setValueAtTime(0.35, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
+    osc.connect(gain).connect(this.masterGain);
+    osc.start(t); osc.stop(t + 0.4
